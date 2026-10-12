@@ -1,0 +1,9 @@
+.zig-cache/
+zig-out/
+book/
+rendered/
+*.ppm
+*.obj
+*.yml
+*.yaml
+
