@@ -3,6 +3,10 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const approxEqAbs = std.math.approxEqAbs;
 
+const bvh = @import("bvh.zig");
+const BBox = bvh.BBox;
+const bbox = bvh.bbox;
+
 const mth = @import("math.zig");
 const Float = mth.Float;
 const Matrix = mth.Matrix;
@@ -16,10 +20,12 @@ const vecMag = mth.vecMag;
 const vecUnit = mth.vecUnit;
 const vecScale = mth.vecScale;
 const matIdentity = mth.matIdentity;
+const matInverse = mth.matInverse;
 const matMulVec = mth.matMulVec;
 const matMulLeft = mth.matMulLeft;
 const matTranspose = mth.matTranspose;
 const EPSILON = mth.EPSILON;
+const INFINITY = mth.INFINITY;
 
 const mtl = @import("material.zig");
 const Material = mtl.Material;
@@ -60,6 +66,7 @@ const VTable = struct {
     normalAt: *const fn (self: *const Object, obj_point: Point, *const Intersection) Vector,
     includes: *const fn (self: *const Object, other: *const Object) bool,
     addShape: *const fn (self: *Object, shape: *Object) void,
+    boundsOf: *const fn (self: *const Object) BBox,
     clone: *const fn (self: *const Object, newobj: *Object, allocator: Allocator) void,
     deinit: *const fn (self: *Object, allocator: Allocator) void,
 };
@@ -97,6 +104,21 @@ pub const Object = struct {
         allocator.destroy(self);
     }
 
+    /// Return the bounding box of a shape
+    pub fn boundsOf(self: *const Self) BBox {
+        return self.vtable.boundsOf(self);
+    }
+
+    /// Return the bbox of a shape modified by its direct transformation
+    pub fn parentSpaceBoundsOf(self: *const Self) BBox {
+        const box = self.vtable.boundsOf(self);
+        const mat = matInverse(&self.itrans) catch {
+            @panic("Non-invertible matrix in Object.parentSpaceBoundsOf()");
+        };
+        const tbox = box.transform(&mat);
+        return tbox;
+    }
+    
     /// Duplicate an object and its descendants
     pub fn clone(self: *const Self, allocator: Allocator) *Object {
         const newobj = allocator.create(Object) catch {
@@ -254,6 +276,7 @@ var group_vtable = VTable {
     .normalAt = errorNormalAt,
     .includes = groupIncludes,
     .addShape = groupAddShape,
+    .boundsOf = groupBoundsOf,
     .clone = groupClone,
     .deinit = groupDeinit,
 };
@@ -343,6 +366,19 @@ fn groupDeinit(self: *Object, allocator: Allocator) void {
     grp.deinit();
 }
 
+fn groupBoundsOf(self: *const Object) BBox {
+    const payload = self.data.?;
+    const grp: *Group = @ptrCast(@alignCast(payload));
+
+    var box = BBox{};   // Empty bounding box
+
+    for (grp.objects.items) |obj| {
+        const cbox = obj.parentSpaceBoundsOf();
+        box.addBox(&cbox);
+    }
+
+    return box;
+}
 
 /// Unit sphere centered at the origin (x^2 + y^2 + z^2 = 1) ------------------
 pub fn sphere(allocator: Allocator) *Object {
@@ -361,6 +397,7 @@ var sphere_vtable = VTable {
     .normalAt = sphereNormalAt,
     .includes = objectIncludes,
     .addShape = errorAddShape,
+    .boundsOf = sphereBoundsOf,
     .clone = errorClone,
     .deinit = errorDeinit,
 };
@@ -400,6 +437,11 @@ fn objectIncludes(self: *const Object, other: *const Object) bool {
     return self == other;
 }
 
+fn sphereBoundsOf(self: *const Object) BBox {
+    _ = self;
+    return bbox(point(-1, -1, -1), point(1, 1, 1));
+}
+
 /// XZ Plane through the origin (x,0,z) ---------------------------------------
 pub fn plane(allocator: Allocator) *Object {
     return Object.init(allocator, &plane_vtable);
@@ -410,6 +452,7 @@ var plane_vtable = VTable {
     .normalAt = planeNormalAt,
     .includes = objectIncludes,
     .addShape = errorAddShape,
+    .boundsOf = planeBoundsOf,
     .clone = errorClone,
     .deinit = errorDeinit,
 };
@@ -430,6 +473,11 @@ fn planeNormalAt(self: *const Object, obj_point: Point, px: *const Intersection)
     _ = obj_point;
     _ = px;
     return vector(0,1,0);
+}
+
+fn planeBoundsOf(self: *const Object) BBox {
+    _ = self;
+    return bbox(point(-INFINITY, 0, -INFINITY), point(INFINITY, 0, INFINITY));
 }
 
 /// Triangle ------------------------------------------------------------------
@@ -466,6 +514,7 @@ var triangle_vtable = VTable {
     .normalAt = triangleNormalAt,
     .includes = objectIncludes,
     .addShape = errorAddShape,
+    .boundsOf = triangleBoundsOf,
     .clone = triangleClone,
     .deinit = triangleDeinit,
 };
@@ -528,6 +577,17 @@ fn triangleDeinit(self: *Object, allocator: Allocator) void {
     allocator.destroy(tri);
 }
 
+fn triangleBoundsOf(self: *const Object) BBox {
+    const payload = self.data.?;
+    const tri: *Triangle = @ptrCast(@alignCast(payload));
+    var box = BBox{};   // Empty bbox
+    box.addPoint(tri.p1);
+    box.addPoint(tri.p2);
+    box.addPoint(tri.p3);
+    return box;
+}
+
+
 /// Smooth Triangle ------------------------------------------------------------------
 pub const SmoothTriangle = struct {
     p1: Point,      // 3 vertices in object space
@@ -568,6 +628,7 @@ var smoothTriangle_vtable = VTable {
     .normalAt = smoothTriangleNormalAt,
     .includes = objectIncludes,
     .addShape = errorAddShape,
+    .boundsOf = smoothTriangleBoundsOf,
     .clone = smoothTriangleClone,
     .deinit = smoothTriangleDeinit,
 };
@@ -633,6 +694,16 @@ fn smoothTriangleDeinit(self: *Object, allocator: Allocator) void {
     allocator.destroy(tri);
 }
 
+fn smoothTriangleBoundsOf(self: *const Object) BBox {
+    const payload = self.data.?;
+    const tri: *SmoothTriangle = @ptrCast(@alignCast(payload));
+    var box = BBox{};   // Empty bbox
+    box.addPoint(tri.p1);
+    box.addPoint(tri.p2);
+    box.addPoint(tri.p3);
+    return box;
+}
+
 /// Cube (AABB from -1 to 1) with side 2 centered at the origin ---------------
 pub fn cube(allocator: Allocator) *Object {
     return Object.init(allocator, &cube_vtable);
@@ -643,6 +714,7 @@ var cube_vtable = VTable {
     .normalAt = cubeNormalAt,
     .includes = objectIncludes,
     .addShape = errorAddShape,
+    .boundsOf = cubeBoundsOf,
     .clone = errorClone,
     .deinit = errorDeinit,
 };
@@ -698,6 +770,11 @@ fn cubeNormalAt(self: *const Object, obj_point: Point, px: *const Intersection) 
     return vector(0, 0, obj_point[2]);
 }
 
+fn cubeBoundsOf(self: *const Object) BBox {
+    _ = self;
+    return bbox(point(-1, -1, -1), point(1, 1, 1));
+}
+
 /// Vertical unit cylinder centered at the origin (x^2 + z^2 = 1) -------------
 const Cylinder = struct {
     min_y: Float,     // Minimum Y coordinate (exclusive)
@@ -721,6 +798,7 @@ var cylinder_vtable = VTable {
     .includes = objectIncludes,
     .addShape = errorAddShape,
     .clone = cylinderClone,
+    .boundsOf = cylinderBoundsOf,
     .deinit = cylinderDeinit,
 };
 
@@ -846,6 +924,12 @@ fn cylinderDeinit(self: *Object, allocator: Allocator) void {
     allocator.destroy(cyl);
 }
 
+fn cylinderBoundsOf(self: *const Object) BBox {
+    const data = self.data.?;
+    const cyl: *Cylinder = @ptrCast(@alignCast(data));
+    return bbox(point(-1, cyl.min_y, -1), point(1, cyl.max_y, 1));
+}
+
 /// Double cone centered at the origin ----------------------------------------
 pub fn cone(allocator: Allocator, min_y: Float, max_y: Float, closed: bool) *Object {
     var obj = Object.init(allocator, &cone_vtable);
@@ -864,6 +948,7 @@ var cone_vtable = VTable {
     .normalAt = coneNormalAt,
     .includes = objectIncludes,
     .addShape = errorAddShape,
+    .boundsOf = coneBoundsOf,
     .clone = cylinderClone,
     .deinit = cylinderDeinit,
 };
@@ -987,6 +1072,13 @@ fn coneNormalAt(self: *const Object, obj_point: Point, px: *const Intersection) 
                   obj_point[2]);
 }
 
+fn coneBoundsOf(self: *const Object) BBox {
+    const data = self.data.?;
+    const con: *Cylinder = @ptrCast(@alignCast(data));
+    const limit = @max(@abs(con.min_y), @abs(con.max_y));
+    return bbox(point(-limit, con.min_y, -limit), point(limit, con.max_y, limit));
+}
+
 /// Constructive Solid Geometry (CSG) -----------------------------------------
 pub const CsgOp = enum {
     csg_union,      // Union
@@ -1017,6 +1109,7 @@ var csg_vtable = VTable {
     .normalAt = errorNormalAt,
     .includes = csgIncludes,
     .addShape = errorAddShape,
+    .boundsOf = csgBoundsOf,
     .clone = csgClone,
     .deinit = csgDeinit,
 };
@@ -1115,6 +1208,20 @@ fn csgDeinit(self: *Object, allocator: Allocator) void {
     allocator.destroy(_csg);
 }
 
+fn csgBoundsOf(self: *const Object) BBox {
+    const payload = self.data.?;
+    const _csg: *Csg = @ptrCast(@alignCast(payload));
+
+    var box = BBox{};   // Empty bounding box
+
+    const lbbox = _csg.left.parentSpaceBoundsOf();
+    const rbbox = _csg.right.parentSpaceBoundsOf();
+    
+    box.addBox(&lbbox);
+    box.addBox(&rbbox);
+
+    return box;
+}
 
 // Object tests ===============================================================
 const expect = std.testing.expect;
