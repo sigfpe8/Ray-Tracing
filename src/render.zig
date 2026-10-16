@@ -22,6 +22,7 @@ const matMulVec = mth.matMulVec;
 const matMulLeft = mth.matMulLeft;
 const matTranspose = mth.matTranspose;
 const EPSILON = mth.EPSILON;
+const INFINITY = mth.INFINITY;
 
 const mtl = @import("material.zig");
 const Color = mtl.Color;
@@ -268,6 +269,26 @@ pub const World = struct {
         printErr("Reflected rays:  {s:>10}\n", .{printWithSeparators(rayStats.reflected, &buf)});
         printErr("Refracted rays:  {s:>10}\n", .{printWithSeparators(rayStats.refracted, &buf)});
         printErr("Shadow rays:     {s:>10}\n", .{printWithSeparators(rayStats.shadow, &buf)});
+    }
+
+    pub fn addAxes(self: *World) void {
+        var xAxis = cylinder(self.allocator, -INFINITY, INFINITY, false);
+        mth.matMulLeft(&xAxis.itrans, &invScaling(0.1, 0.1, 0.1));
+        mth.matMulLeft(&xAxis.itrans, &invRotationZ(std.math.pi / 2.0));
+        xAxis.material.color = Color{1, 0, 0};
+        self.scene.addShape(xAxis);
+
+
+        var yAxis = cylinder(self.allocator, -INFINITY, INFINITY, false);
+        mth.matMulLeft(&yAxis.itrans, &invScaling(0.06, 0.06, 0.06));
+        yAxis.material.color = Color{0, 1, 0};
+        self.scene.addShape(yAxis);
+
+        var zAxis = cylinder(self.allocator, -INFINITY, INFINITY, false);
+        mth.matMulLeft(&zAxis.itrans, &invScaling(0.06, 0.06, 0.06));
+        mth.matMulLeft(&zAxis.itrans, &invRotationX(std.math.pi / 2.0));
+        zAxis.material.color = Color{0, 0, 1};
+        self.scene.addShape(zAxis);
     }
 
     pub fn renderThreads(self: *const World, cam: *const Camera, fname: []const u8, io: Io, nthrds: usize) !void {

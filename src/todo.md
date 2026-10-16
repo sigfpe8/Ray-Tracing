@@ -9,7 +9,6 @@
 * Add --out <filename> option
 * Test all scene desciptions from lerouxrgd
 * Restructure directory and/or remove JavaScript implementation, leaving only Zig and Go
-* Initialize git versioning
 * Push to Github
 * Support multiple point lights
 
@@ -25,4 +24,5 @@
 * Use proper stdio instead of std.debug.print
 * Add statistics for number or rays traced during rendering
 * Set correct line numbers in struct LevelLine
+* Initialize git versioning
 

@@ -206,6 +206,8 @@ fn readYaml(io: Io, allocator: Allocator, lines: []const LevelLine) !Setting {
         }
     }
 
+    world.addAxes();
+    
     const setting = Setting{  .world = world, .camera = cam, };
     return setting;
 }
