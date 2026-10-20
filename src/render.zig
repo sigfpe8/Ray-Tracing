@@ -314,6 +314,7 @@ pub const World = struct {
         while (y < height) : (y += len) {
             len = if (height - y < 2 * thrdHeight) height - y else thrdHeight;
             // std.debug.print("y={d}, len={d}\n", .{y,len});
+            // try grp.concurrent(io, renderThreadAntiAlias, .{ self, cam, y, len, pixels });
             try grp.concurrent(io, renderThread, .{ self, cam, y, len, pixels });
         }
 
@@ -358,6 +359,46 @@ pub const World = struct {
                 const r = Ray.forPixel(cam, x, y);
                 const color = self.colorAt(r, MAX_RAYS);
                 pixels[y * width + x] = color;
+            }
+        }
+    }
+
+    // Thread function to handle a block of contiguous lines with anti aliasing
+    fn renderThreadAntiAlias(self: *const World,
+                    cam: *const Camera,
+                    yIni: usize,
+                    len: usize,
+                    pixels: []Color) std.Io.Cancelable!void {
+        var y: usize = yIni;
+        const width = cam.hsize;
+        const height = yIni + len;
+        const n: usize = 4;
+        const nn: Float = 1.0 / @as(Float,@floatFromInt(n * n));
+        var prng = std.Random.DefaultPrng.init(12345);
+        const rand = prng.random();
+
+        var sp = SubPixel{};
+        const sn: Float = @floatFromInt(n);
+
+        while (y < height) : (y += 1) {
+            sp.py = @floatFromInt(y);
+            var x: usize = 0;
+            while (x < width) : (x += 1) {
+                sp.px = @floatFromInt(x);
+                // Divide the pixel in n x n sub-pixels
+                var sy: usize = 0;
+                var color = black;
+                while (sy < n) : (sy += 1) {
+                    sp.sy = (@as(Float,@floatFromInt(sy)) + rand.float(Float)) / sn;
+                    var sx: usize = 0;
+                    while (sx < n) : (sx += 1) {
+                        sp.sx = (@as(Float,@floatFromInt(sx)) + rand.float(Float)) / sn;
+                        const ray = Ray.forSubPixel(cam, &sp);
+                        color += self.colorAt(ray, MAX_RAYS);
+                    }
+                }
+                // Average all sub-pixels (multiply by 1/n^2)
+                pixels[y * width + x] = colScale(color, nn);
             }
         }
     }
@@ -433,7 +474,7 @@ pub const World = struct {
             diffuse = colScale(effective_color, material.diffuse * light_dot_normal);
 
             // reflect_dot_eye represents the cosine of the angle between the
-            // reflection vector and the eye vecto. A negative number means the
+            // reflection vector and the eye vector. A negative number means the
             // light reflects away from the eye.
             const reflectv = reflect(-lightv, normalv);
             const reflect_dot_eye = dot(reflectv, eyev);
@@ -490,6 +531,13 @@ pub const World = struct {
 
         return colScale(color, hi.obj.material.transparency);
     }
+};
+
+pub const SubPixel = struct {
+    px: Float = 0,      // Coordinates of pixel's upper left corner [0, hres)
+    py: Float = 0,
+    sx: Float = 0,      // Coordinates of sub-pixel's upper left corner [0, 1)
+    sy: Float = 0,
 };
 
 pub const RayStats = struct {
@@ -554,10 +602,33 @@ pub const Ray = struct {
         // (remember that the canvas is at z = -1)
         const pixel = matMulVec(&cam.itrans, point(world_x, world_y, -1));
         const origin = matMulVec(&cam.itrans, point(0, 0, 0));
-        const direction = vecUnit(pixel - origin);
-        rayStats.total += 1;
+        // const direction = vecUnit(pixel - origin);
+        // rayStats.total += 1;
 
-        return .{ .ori = origin, .dir = direction };
+        return Ray.unit(origin, pixel - origin);
+        // return .{ .ori = origin, .dir = direction };
+    }
+
+    pub fn forSubPixel(cam: *const Camera, sp: *const SubPixel) Ray {
+        // The offset from the edge of the canvas to the pixel's center
+        const xoff: Float = (sp.px + sp.sx) * cam.pixel_size;
+        const yoff: Float = (sp.py + sp.sy) * cam.pixel_size;
+
+        // The untransformed coordinates of the pixel in world space.
+        // (remember that the camera looks toward -z, so +x is to the *left*)
+        const world_x = cam.half_width - xoff;
+        const world_y = cam.half_height - yoff;
+
+        // Using the camera matrix, transform the canvas point and the origin,
+        // and then compute the ray's direction vector.
+        // (remember that the canvas is at z = -1)
+        const pixel = matMulVec(&cam.itrans, point(world_x, world_y, -1));
+        const origin = matMulVec(&cam.itrans, point(0, 0, 0));
+        // const direction = vecUnit(pixel - origin);
+        // rayStats.total += 1;
+
+        return Ray.unit(origin, pixel - origin);
+        // return .{ .ori = origin, .dir = direction };
     }
 };
 
