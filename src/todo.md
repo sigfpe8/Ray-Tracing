@@ -25,4 +25,5 @@
 * Add statistics for number or rays traced during rendering
 * Set correct line numbers in struct LevelLine
 * Initialize git versioning
-
+* Implement antialiasing
+* Add tracer

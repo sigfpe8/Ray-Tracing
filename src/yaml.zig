@@ -53,6 +53,7 @@ const rnd = @import("render.zig");
 const Camera = rnd.Camera;
 const PointLight = rnd.PointLight;
 const Setting = rnd.Setting;
+const Tracer = rnd.Tracer;
 const World = rnd.World;
 
 const sio = @import("stdio.zig");
@@ -87,8 +88,9 @@ pub fn renderYaml(io: Io, allocator: Allocator, inp_file: []const u8) !void {
 
     const setting = try readYamlFile(io, allocator, inp_file);
 
-    const world = setting.world;
-    try world.renderThreads(&setting.camera, out_file, io, 4);
+    // const world = setting.world;
+    // try world.renderThreads(&setting.camera, out_file, io, 4);
+    try setting.render(out_file, io);
 }
 
 fn readYamlFile(io: Io, allocator: Allocator, fname: []const u8) !Setting {
@@ -156,10 +158,6 @@ fn readYamlFile(io: Io, allocator: Allocator, fname: []const u8) !Setting {
                                                  .line = std.mem.trimEnd(u8, line[i..], " ") });
     }
    
-    // for (lines.items) |ll| {
-    //     std.debug.print("{d:2>}  [{d}] '{s}\n", .{ll.lineno, ll.level, ll.line});
-    // }
-
     const setting = try readYaml(io, allocator, lines.items);
 
     return setting;
@@ -168,6 +166,7 @@ fn readYamlFile(io: Io, allocator: Allocator, fname: []const u8) !Setting {
 fn readYaml(io: Io, allocator: Allocator, lines: []const LevelLine) !Setting {
     var cam: Camera = undefined;
     var light = PointLight{ .position = point(0, 10, -10), .intensity = Color{1, 1, 1}};
+    var tracer = Tracer{};
     var world = World.init(light, allocator);
 
     var ind: usize = 0;     // Index into lines[]
@@ -199,6 +198,8 @@ fn readYaml(io: Io, allocator: Allocator, lines: []const LevelLine) !Setting {
             const obj = try readObject(allocator, lines[ind..], &inc, .objSphere);
             world.scene.addShape(obj);
             // std.debug.print("Added a sphere, mat={}\n", .{obj.material});
+        } else if (eql(u8, line, "- add: tracer")) {
+            tracer = try readTracer(lines[ind..], &inc);
         } else if (startsWith(u8, line, "- define: ")) {
             try readDefine(lines[ind..], &inc);
         } else {
@@ -206,9 +207,9 @@ fn readYaml(io: Io, allocator: Allocator, lines: []const LevelLine) !Setting {
         }
     }
 
-    world.addAxes();
-    
-    const setting = Setting{  .world = world, .camera = cam, };
+    // world.addAxes();
+
+    const setting = Setting{ .tracer = tracer, .world = world, .camera = cam, };
     return setting;
 }
 
@@ -233,9 +234,9 @@ fn readCamera(lines: []const LevelLine, pinc: *usize) !Camera {
         }
 
         if (startsWith(u8, line, "width: ")) {
-            hsize = try std.fmt.parseUnsigned(usize, line[7..],10);
+            hsize = try parseUint(line[7..]);
         } else if (startsWith(u8, line, "height: ")) {
-            vsize = try std.fmt.parseUnsigned(usize, line[8..],10);
+            vsize = try parseUint(line[8..]);
         } else if (startsWith(u8, line, "field-of-view: ")) {
             _ = try parseFloat(line[15..], &fov);
         } else if (startsWith(u8, line, "from: ")) {
@@ -312,7 +313,7 @@ fn readGroup(io: Io, allocator: Allocator, lines: []const LevelLine, pinc: *usiz
     pinc.* = ind;    // # of lines consumed at this level including base line
 
     if (fname) |name| {
-        grp = try readObjFile(io, allocator, name, &material, null);
+        grp = try readObjFile(io, allocator, name, &material);
     } else {
         grp = group(allocator);
     }
@@ -590,6 +591,36 @@ fn readPatternColors(lines: []const LevelLine, pinc: *usize) !struct { Color, Co
     return .{ colorA, colorB };
 }
 
+fn readTracer(lines: []const LevelLine, pinc: *usize) !Tracer {
+    // Default parameters for the tracer
+    var tracer = Tracer{};
+    var ind: usize = 1;     // Skip parent node at ind == 0
+    const base_level = lines[0].level;
+
+    while (ind < lines.len) : (ind += 1) {
+        const line = lines[ind].line;
+        const level = lines[ind].level;
+        lineno = lines[ind].lineno;
+
+        if (level <= base_level) {    // End of tracer block?
+            break;
+        }
+
+        if (startsWith(u8, line, "antialiasing: ")) {
+            tracer.antialiasing = try parseBool(line[14..]);
+        } else if (startsWith(u8, line, "samples: ")) {
+            tracer.samples = try parseSquare(line[9..]);
+        } else if (startsWith(u8, line, "threads: ")) {
+            tracer.threads = try parseUint(line[9..]);
+        } else {
+            return yamlError("Invalid light parameter", line);
+        }
+    }
+
+    pinc.* = ind;    // # of lines consumed at this level including base line
+    return tracer;
+}
+
 fn readTransform(lines: []const LevelLine, pinc: *usize, itrans: *Matrix) !void {
     var ind: usize = 1;     // Skip parent node at ind == 0
     const base_level = lines[0].level;
@@ -757,9 +788,83 @@ fn parseFloat(line: []const u8, p: *Float) ![]const u8 {
         }
     }
     // i is 1 char past the number
-    p.* = try std.fmt.parseFloat(Float, num[0..i]);
+    const flt = std.fmt.parseFloat(Float, num[0..i]) catch {
+        return yamlError("Invalid floating-point number", line);
+    };
+
+    p.* = flt;
     return num[i..];
 }
+
+/// Parse an unsigned integer
+fn parseUint(line: []const u8) !usize {
+    const num = std.mem.trim(u8, line, " ");
+    var i: usize = 0;
+
+    // Literal unsigned integer
+    while (i < num.len) : (i += 1) {
+        if (!std.ascii.isDigit(num[i])) {
+            break;
+        }
+    }
+    // i is 1 char past the number
+    const unum = std.fmt.parseUnsigned(usize, num[0..i], 10) catch {
+        return yamlError("Invalid unsigned integer", line);
+    };
+    return unum;
+}
+
+/// Parse an unsigned integer that must be a perfect square
+fn parseSquare(line: []const u8) !usize {
+    const num = std.mem.trim(u8, line, " ");
+    var i: usize = 0;
+
+    // Literal unsigned integer
+    while (i < num.len) : (i += 1) {
+        if (!std.ascii.isDigit(num[i])) {
+            break;
+        }
+    }
+    // i is 1 char past the number
+    const unum = std.fmt.parseUnsigned(usize, num[0..i], 10) catch {
+        return yamlError("Invalid unsigned integer", line);
+    };
+
+    // Floor of integer square root using binary search
+    var low: usize = 0;
+    var high = unum;
+    while (low <= high) {
+        const mid = low + (high - low) / 2;
+        // This is equivalent to testing mid * mid <= unum
+        // but avoids potential overflow during the search.
+        // Not a problem here where small integers are used for
+        // the number of samples per pixel, but a nice touch
+        // to have in more general cases.
+        if (mid == 0 or mid <= unum / mid) {
+            low = mid + 1;
+        } else {
+            high = mid - 1;
+        }
+    }
+
+    if (high * high != unum) {
+        return yamlError("# of samples must be a perfect square", line);
+    }
+    return high;
+}
+
+fn parseBool(line: []const u8) !bool {
+    const val = std.mem.trim(u8, line, " ");
+
+    if (std.ascii.eqlIgnoreCase(val, "false")) {
+        return false;
+    } else if (std.ascii.eqlIgnoreCase(val, "true")) {
+        return true;
+    }
+
+    return yamlError("Invalid boolean value", line);
+}
+
 
 fn skipChar(line: []const u8, chr: u8) ![]const u8 {
     var i: usize = 0;

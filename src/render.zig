@@ -168,11 +168,25 @@ const HitInfo = struct {
     }
 };
 
-/// A Setting is the World + a Camera
+/// A Setting is a Tracer + the World + a Camera
 pub const Setting = struct {
+    tracer: Tracer,
     world: World,
     camera: Camera,
+
+    pub fn render(self: *const Setting, fname: []const u8, io: Io) !void {
+        const world = self.world;
+        try world.renderThreads(&self.camera, fname, io, &self.tracer);
+    }
 };
+
+/// How to render the scene (will be updated later)
+pub const Tracer = struct {
+    threads: usize = 4,          // # of threads to use for rendering
+    antialiasing: bool = false,  // Antialiasing consumes lots of cpu time
+    samples: usize = 1,          // Square root of the # of samples / pixel
+};
+
 
 /// The World is a collection of objects and lights that make up the world
 pub const World = struct {
@@ -291,7 +305,7 @@ pub const World = struct {
         self.scene.addShape(zAxis);
     }
 
-    pub fn renderThreads(self: *const World, cam: *const Camera, fname: []const u8, io: Io, nthrds: usize) !void {
+    pub fn renderThreads(self: *const World, cam: *const Camera, fname: []const u8, io: Io, tr: *const Tracer) !void {
         const width = cam.hsize;
         const height = cam.vsize;
         var canvas = try Canvas.init(width,height,self.allocator);
@@ -299,10 +313,13 @@ pub const World = struct {
         const pixels = canvas.pixels;
         rayStats = RayStats{};
 
-        printErr("\nRendering {s} ({d}x{d}) with {d} threads\n", .{fname,width,height,nthrds});
+        printErr("\nRendering {s} ({d}x{d}) with {d} threads\n", .{fname,width,height,tr.threads});
+        if (tr.antialiasing) {
+            printErr("Antialiasing with {d} samples per pixel\n", .{ tr.samples * tr.samples });
+        }
         var grp: std.Io.Group = .init;
 
-        const thrdHeight: usize = @divTrunc(height,nthrds);
+        const thrdHeight: usize = @divTrunc(height,tr.threads);
         const start = std.Io.Clock.now(.awake, io);
 
         // Spawn nthrds threads
@@ -314,8 +331,11 @@ pub const World = struct {
         while (y < height) : (y += len) {
             len = if (height - y < 2 * thrdHeight) height - y else thrdHeight;
             // std.debug.print("y={d}, len={d}\n", .{y,len});
-            // try grp.concurrent(io, renderThreadAntiAlias, .{ self, cam, y, len, pixels });
-            try grp.concurrent(io, renderThread, .{ self, cam, y, len, pixels });
+            if (tr.antialiasing) {
+                try grp.concurrent(io, renderThreadAntiAlias, .{ self, cam, y, len, pixels, tr.samples });
+            } else {
+                try grp.concurrent(io, renderThread, .{ self, cam, y, len, pixels });
+            }
         }
 
         // Wait for all threads to finish
@@ -363,22 +383,23 @@ pub const World = struct {
         }
     }
 
-    // Thread function to handle a block of contiguous lines with anti aliasing
+    // Thread function to handle a block of contiguous lines with antialiasing
     fn renderThreadAntiAlias(self: *const World,
-                    cam: *const Camera,
-                    yIni: usize,
-                    len: usize,
-                    pixels: []Color) std.Io.Cancelable!void {
+            cam: *const Camera,
+            yIni: usize,        // first line of this block
+            len: usize,         // # of lines in this block
+            pixels: []Color,
+            samples: usize,     // # of samples per pixel
+        ) std.Io.Cancelable!void {
         var y: usize = yIni;
         const width = cam.hsize;
         const height = yIni + len;
-        const n: usize = 4;
-        const nn: Float = 1.0 / @as(Float,@floatFromInt(n * n));
+        const n2: Float = 1.0 / @as(Float,@floatFromInt(samples * samples));
         var prng = std.Random.DefaultPrng.init(12345);
         const rand = prng.random();
 
         var sp = SubPixel{};
-        const sn: Float = @floatFromInt(n);
+        const sn: Float = @floatFromInt(samples);
 
         while (y < height) : (y += 1) {
             sp.py = @floatFromInt(y);
@@ -388,17 +409,17 @@ pub const World = struct {
                 // Divide the pixel in n x n sub-pixels
                 var sy: usize = 0;
                 var color = black;
-                while (sy < n) : (sy += 1) {
+                while (sy < samples) : (sy += 1) {
                     sp.sy = (@as(Float,@floatFromInt(sy)) + rand.float(Float)) / sn;
                     var sx: usize = 0;
-                    while (sx < n) : (sx += 1) {
+                    while (sx < samples) : (sx += 1) {
                         sp.sx = (@as(Float,@floatFromInt(sx)) + rand.float(Float)) / sn;
                         const ray = Ray.forSubPixel(cam, &sp);
-                        color += self.colorAt(ray, MAX_RAYS);
+                        color += self.colorAt(ray, MAX_RAYS);   // Accumulate all samples
                     }
                 }
-                // Average all sub-pixels (multiply by 1/n^2)
-                pixels[y * width + x] = colScale(color, nn);
+                // Average all sub-pixels (multiply by 1/samples^2)
+                pixels[y * width + x] = colScale(color, n2);
             }
         }
     }
@@ -692,8 +713,8 @@ fn hitIndex(xs: []Intersection) ?usize {
     return null;
 }
 
-/// Given an incident vector and a normal at a hit point,
-/// return the reflected vector at that point
+/// Given an incident unit vector and the (unit) normal at
+/// a hit point, return the reflected vector at that point
 fn reflect(v: Vector, n: Vector) Vector {
     // v - 2(v . n) n
     // The minus sign here is because v is incident, and
