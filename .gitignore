@@ -2,6 +2,7 @@
 zig-out/
 book/
 rendered/
+*.png
 *.ppm
 *.obj
 *.yml

@@ -184,7 +184,7 @@ pub const Setting = struct {
 pub const Tracer = struct {
     threads: usize = 4,          // # of threads to use for rendering
     antialiasing: bool = false,  // Antialiasing consumes lots of cpu time
-    samples: usize = 1,          // Square root of the # of samples / pixel
+    samples: usize = 4,          // Square root of the # of samples / pixel
 };
 
 
@@ -245,7 +245,8 @@ pub const World = struct {
         var canvas = try Canvas.init(width,height,self.allocator);
         defer canvas.deinit(self.allocator);
         var pixels = canvas.pixels;
-        rayStats = RayStats{};
+        var local_stats = RayStats{};
+        rayStats = &local_stats;
 
         printErr("\nRendering {s} ({d}x{d}) in a single thread\n", .{fname,width,height});
         const start = std.Io.Clock.now(.awake, io);
@@ -311,7 +312,10 @@ pub const World = struct {
         var canvas = try Canvas.init(width,height,self.allocator);
         defer canvas.deinit(self.allocator);
         const pixels = canvas.pixels;
-        rayStats = RayStats{};
+
+        // Allocate one RayStats{} block per thread
+        var rstats: []RayStats = try self.allocator.alloc(RayStats, tr.threads);
+        defer self.allocator.free(rstats);
 
         printErr("\nRendering {s} ({d}x{d}) with {d} threads\n", .{fname,width,height,tr.threads});
         if (tr.antialiasing) {
@@ -328,14 +332,16 @@ pub const World = struct {
         // nthrds does not divide height exactly.
         var len = thrdHeight;
         var y: usize = 0;
+        var n: usize = 0;
         while (y < height) : (y += len) {
             len = if (height - y < 2 * thrdHeight) height - y else thrdHeight;
             // std.debug.print("y={d}, len={d}\n", .{y,len});
             if (tr.antialiasing) {
-                try grp.concurrent(io, renderThreadAntiAlias, .{ self, cam, y, len, pixels, tr.samples });
+                try grp.concurrent(io, renderThreadAntiAlias, .{ self, cam, y, len, pixels, &rstats[n], tr.samples });
             } else {
-                try grp.concurrent(io, renderThread, .{ self, cam, y, len, pixels });
+                try grp.concurrent(io, renderThread, .{ self, cam, y, len, pixels, &rstats[n]});
             }
+            n += 1;
         }
 
         // Wait for all threads to finish
@@ -350,28 +356,45 @@ pub const World = struct {
         var buf: [16]u8 = undefined;
         const mil = std.Io.Duration.toMilliseconds(dur);
         const sec = std.Io.Duration.toSeconds(dur);
-        printErr("Rendered {s} pixels in ", .{printWithSeparators(width * height, &buf)});
+        printErr("Rendered {s} pixels in ", .{ printWithSeparators(width * height, &buf) });
         if (mil < 1000) {
             printErr("{d} ms\n", .{mil});
         } else {
             printErr("{d} s\n", .{sec});
         }
+        // Add up the statistics from all the threads
+        var total: usize = 0;
+        var reflected: usize = 0;
+        var refracted: usize = 0;
+        var shadow: usize = 0;
+        for (rstats) |*rs| {
+            total     += rs.total;
+            reflected += rs.reflected;
+            refracted += rs.refracted;
+            shadow    += rs.shadow;
+        }
         printErr("\n", .{});
-        printErr("Total # of rays: {s:>10}\n", .{printWithSeparators(rayStats.total, &buf)});
-        printErr("Reflected rays:  {s:>10}\n", .{printWithSeparators(rayStats.reflected, &buf)});
-        printErr("Refracted rays:  {s:>10}\n", .{printWithSeparators(rayStats.refracted, &buf)});
-        printErr("Shadow rays:     {s:>10}\n", .{printWithSeparators(rayStats.shadow, &buf)});
+        printErr("Primary rays:    {s:>12}\n", .{ printWithSeparators(width * height, &buf) });
+        printErr("Reflected rays:  {s:>12}\n", .{ printWithSeparators(reflected, &buf) });
+        printErr("Refracted rays:  {s:>12}\n", .{ printWithSeparators(refracted, &buf) });
+        printErr("Shadow rays:     {s:>12}\n", .{ printWithSeparators(shadow, &buf) });
+        printErr("Total # of rays: {s:>12}\n", .{ printWithSeparators(total, &buf) });
     }
 
     // Thread function to handle a block of contiguous lines
     fn renderThread(self: *const World,
-                    cam: *const Camera,
-                    yIni: usize,
-                    len: usize,
-                    pixels: []Color) std.Io.Cancelable!void {
+            cam: *const Camera,
+            yIni: usize,        // first line of this block
+            len: usize,         // # of lines in this block
+            pixels: []Color,
+            rstats: *RayStats,  // pointer to TLS stats
+        ) std.Io.Cancelable!void {
         var y: usize = yIni;
         const width = cam.hsize;
         const height = yIni + len;
+
+        rayStats = rstats;          // Thread-local storage
+        rayStats.* = RayStats{};    // Zero stats
 
         while (y < height) : (y += 1) {
             var x: usize = 0;
@@ -389,6 +412,7 @@ pub const World = struct {
             yIni: usize,        // first line of this block
             len: usize,         // # of lines in this block
             pixels: []Color,
+            rstats: *RayStats,  // pointer to TLS stats
             samples: usize,     // # of samples per pixel
         ) std.Io.Cancelable!void {
         var y: usize = yIni;
@@ -397,6 +421,9 @@ pub const World = struct {
         const n2: Float = 1.0 / @as(Float,@floatFromInt(samples * samples));
         var prng = std.Random.DefaultPrng.init(12345);
         const rand = prng.random();
+
+        rayStats = rstats;          // Thread-local storage
+        rayStats.* = RayStats{};    // Zero stats
 
         var sp = SubPixel{};
         const sn: Float = @floatFromInt(samples);
@@ -568,7 +595,7 @@ pub const RayStats = struct {
     shadow: usize = 0,
 };
 
-pub var rayStats: RayStats = undefined;
+threadlocal var rayStats: *RayStats = undefined;
 
 pub const Ray = struct {
     ori: Point,
