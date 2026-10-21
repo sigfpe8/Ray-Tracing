@@ -4,6 +4,9 @@ const Allocator = std.mem.Allocator;
 const Io = std.Io;
 const Reader = Io.Reader;
 
+const bvh = @import("bvh.zig");
+const BBox = bvh.BBox;
+
 const obi = @import("object.zig");
 const Group = obi.Group;
 const Object = obi.Object;
@@ -27,6 +30,8 @@ const Material = mtl.Material;
 const sio = @import("stdio.zig");
 const printErr = sio.printErr;
 
+const show_stats = true;
+
 pub const ObjStats = struct {
     lines: usize,       // # of read lines
     ignored: usize,     // # of ignored lines
@@ -39,17 +44,17 @@ pub const ObjStats = struct {
     groups: usize,      // # of groups (g)
     objects: usize,     // # of objects (o)
     bytes: usize,       // Memory occupied by group
-    x_min: Float,         // Minimum and maximum X coordinates
+    x_min: Float,       // Minimum and maximum X coordinates
     x_max: Float,
-    y_min: Float,         // Minimum and maximum Y coordinates
+    y_min: Float,       // Minimum and maximum Y coordinates
     y_max: Float,
-    z_min: Float,         // Minimum and maximum Z coordinates
+    z_min: Float,       // Minimum and maximum Z coordinates
     z_max: Float,
     elapsed: i64,       // elapsed time in milliseconds
 };
 
 /// Reads a file in OBJ format and returns the corresponding Object.
-pub fn readObjFile(io: Io, allocator: Allocator, fname: []const u8, material: *const Material, ostats: ?*ObjStats) !*Object {
+pub fn readObjFile(io: Io, allocator: Allocator, fname: []const u8, material: *const Material) !*Object {
     const file = Io.Dir.cwd().openFile(io, fname, .{ .mode = .read_only }) catch |err| {
         if (err == error.FileNotFound) {
             printErr("Could not open '{s}'\n", .{fname});
@@ -59,22 +64,29 @@ pub fn readObjFile(io: Io, allocator: Allocator, fname: []const u8, material: *c
     defer file.close(io);
     var buffer: [2048]u8 = undefined;
     var file_reader: Io.File.Reader = .init(file, io, &buffer);
+    var ostats: ObjStats = undefined;
+
+    if (show_stats) {
+        printErr("\nReading {s}\n", .{fname});
+    }
 
     const start = std.Io.Clock.now(.awake, io);
 
-    const obj = try readObj(allocator, &file_reader.interface, material, ostats);
+    const obj = try readObj(allocator, &file_reader.interface, material, &ostats);
 
     const end = std.Io.Clock.now(.awake, io);
     const dur = start.durationTo(end);
-    if (ostats) |ps| {
-        ps.elapsed = std.Io.Duration.toMilliseconds(dur);
+    ostats.elapsed = std.Io.Duration.toMilliseconds(dur);
+
+    if (show_stats) {
+        showStats(&ostats);
     }
 
     return obj;
 }
 
 /// Main code for reading OBJ data
-fn readObj(allocator: Allocator, r: *Reader, material: *const Material, ostats: ?*ObjStats) !*Object {
+fn readObj(allocator: Allocator, r: *Reader, material: *const Material, ostats: *ObjStats) !*Object {
     var vs: std.ArrayList(Point) = .empty;
     var vt: std.ArrayList(Point) = .empty;
     var vn: std.ArrayList(Vector) = .empty;
@@ -130,10 +142,10 @@ fn readObj(allocator: Allocator, r: *Reader, material: *const Material, ostats: 
                         try vs.append(allocator, point(coords[0], coords[1], coords[2]));
                         x_min = @min(x_min, coords[0]);
                         x_max = @max(x_max, coords[0]);
-                        y_min = @min(x_min, coords[1]);
-                        y_max = @max(x_max, coords[1]);
-                        z_min = @min(x_min, coords[2]);
-                        z_max = @max(x_max, coords[2]);
+                        y_min = @min(y_min, coords[1]);
+                        y_max = @max(y_max, coords[1]);
+                        z_min = @min(z_min, coords[2]);
+                        z_max = @max(z_max, coords[2]);
                     },
                     'n' => {
                         _ = try parseCoords(&coords, line[1..], 3, n_lines);
@@ -241,25 +253,23 @@ fn readObj(allocator: Allocator, r: *Reader, material: *const Material, ostats: 
         }
     }
 
-    if (ostats) |ps| {
-        ps.lines = n_lines;
-        ps.ignored = n_ignored;
-        ps.vertices = vs.items.len;
-        ps.vtextures = vt.items.len;
-        ps.vnormals = vn.items.len;
-        ps.triangles = n_triangles;
-        ps.polygons = n_polygons;
-        ps.largest = largest;
-        ps.groups = n_groups;
-        ps.objects = n_objects;
-        ps.bytes = bytes;
-        ps.x_min = x_min;
-        ps.x_max = x_max;
-        ps.y_min = y_min;
-        ps.y_max = y_max;
-        ps.z_min = z_min;
-        ps.z_max = z_max;
-    }
+    ostats.lines = n_lines;
+    ostats.ignored = n_ignored;
+    ostats.vertices = vs.items.len;
+    ostats.vtextures = vt.items.len;
+    ostats.vnormals = vn.items.len;
+    ostats.triangles = n_triangles;
+    ostats.polygons = n_polygons;
+    ostats.largest = largest;
+    ostats.groups = n_groups;
+    ostats.objects = n_objects;
+    ostats.bytes = bytes;
+    ostats.x_min = x_min;
+    ostats.x_max = x_max;
+    ostats.y_min = y_min;
+    ostats.y_max = y_max;
+    ostats.z_min = z_min;
+    ostats.z_max = z_max;
 
     vs.deinit(allocator);
     vt.deinit(allocator);
@@ -313,6 +323,38 @@ fn parseFaceElement(text: []const u8) !struct { ?isize, ?isize, ?isize } {
     }
 
     return .{ vs[0], vs[1], vs[2] };
+}
+
+fn showStats(os: *const ObjStats) void {
+    printErr("     Read lines: {d}\n", .{os.lines});
+    printErr("  Ignored lines: {d}\n", .{os.ignored});
+    printErr("       Vertices: {d}\n", .{os.vertices});
+    printErr("              X: [{d}, {d}]\n", .{os.x_min, os.x_max});
+    printErr("              Y: [{d}, {d}]\n", .{os.y_min, os.y_max});
+    printErr("              Z: [{d}, {d}]\n", .{os.z_min, os.z_max});
+    printErr("Vertex textures: {d}\n", .{os.vtextures});
+    printErr(" Vertex normals: {d}\n", .{os.vnormals});
+    printErr("      Triangles: {d}\n", .{os.triangles});
+    printErr("       Polygons: {d} ({d})\n", .{os.polygons, os.largest});
+    printErr("         Groups: {d}\n", .{os.groups});
+    printErr("        Objects: {d}\n", .{os.objects});
+
+
+    printErr("         Memory: ", .{});
+    if (os.bytes < 1024) {
+        printErr("{d} B\n", .{os.bytes});
+    } else if (os.bytes < 1024 * 1024) {
+        printErr("{d} KB\n", .{@divTrunc(os.bytes, 1024)});
+    } else {
+        printErr("{d} MB\n", .{@divTrunc(os.bytes, 1024 * 1024)});
+    }
+    
+    printErr("   Elapsed time: ", .{});
+    if (os.elapsed < 1000) {
+        printErr("{d} ms\n", .{os.elapsed}); 
+    } else {
+        printErr("{d} s\n", .{@divTrunc(os.elapsed, 1000)}); 
+    }
 }
 
 const expect = std.testing.expect;
