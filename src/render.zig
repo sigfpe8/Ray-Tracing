@@ -91,7 +91,7 @@ const HitInfo = struct {
     under_pnt: Point,
     eyev: Vector,       // Unit
     normalv: Vector,    // Unit
-    reflectv: Vector,
+    reflectv: Vector,   // Unit
     inside: bool,
     n1: Float,
     n2: Float,
@@ -543,7 +543,7 @@ pub const World = struct {
             return black;
         }
 
-        const reflect_ray = Ray.new(hi.over_pnt, hi.reflectv);
+        const reflect_ray = Ray.unit(hi.over_pnt, hi.reflectv);
         rayStats.reflected += 1;
         const color = self.colorAt(reflect_ray, rays - 1);
         return colScale(color, hi.obj.material.reflective);
@@ -573,7 +573,8 @@ pub const World = struct {
 
         // Create the refracted ray
         const dir = vecScale(hi.normalv, n_ratio * cos_i - cos_t) - vecScale(hi.eyev, n_ratio);
-        const refract_ray = Ray.new(hi.under_pnt, vecUnit(dir));
+        // const refract_ray = Ray.new(hi.under_pnt, vecUnit(dir));
+        const refract_ray = Ray.unit(hi.under_pnt, dir);
         rayStats.refracted += 1;
         const color = self.colorAt(refract_ray, rays - 1);
 
@@ -625,7 +626,10 @@ pub const Ray = struct {
     }
 
     /// Apply a transformation to a ray. The resulting ray may
-    /// not be unit length and this is expected.
+    /// not be unit length and this is expected. Transformed rays
+    /// are seen only by the xxxIntersects() methods of the
+    /// geometric objects. The rest of the code deals with rays
+    /// of unit length.
     pub fn transform(self: *const Ray, mat: *const Matrix) Ray {
         const ori = matMulVec(mat, self.ori);
         const dir = matMulVec(mat, self.dir);
@@ -741,7 +745,8 @@ fn hitIndex(xs: []Intersection) ?usize {
 }
 
 /// Given an incident unit vector and the (unit) normal at
-/// a hit point, return the reflected vector at that point
+/// a hit point, return the reflected vector at that point,
+/// which is also a unit vector. No need to normalize.
 fn reflect(v: Vector, n: Vector) Vector {
     // v - 2(v . n) n
     // The minus sign here is because v is incident, and
