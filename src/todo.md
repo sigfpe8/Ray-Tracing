@@ -1,14 +1,12 @@
 # Things I need to do for the Ray Tracer
 
 * Implement BVH
-* Fix race conditions when updating the ray statistics with multiple threads
 * Add verbose option
 * Add support for shapes in groups in yaml file
 * Create .yaml scene descriptions for the existing demos
 * Modify the CLI options to remove demos and leave only .yaml scene descriptions
 * Add --out <filename> option
 * Test all scene desciptions from lerouxrgd
-* Restructure directory and/or remove JavaScript implementation, leaving only Zig and Go
 * Push to Github
 * Support multiple point lights
 
@@ -27,3 +25,6 @@
 * Initialize git versioning
 * Implement antialiasing
 * Add tracer
+* Fix race conditions when updating the ray statistics with multiple threads
+* Restructure directory and/or remove JavaScript implementation, leaving only Zig and Go
+* Use bounding boxes to optimize rendering with groups or csgs

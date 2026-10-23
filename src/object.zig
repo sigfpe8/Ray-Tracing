@@ -142,6 +142,8 @@ pub const Object = struct {
     /// Return the number of intersections of the ray with the object.
     /// If there are intersections, fill in the corresponding nodes in xs[].
     pub fn intersects(self: *const Self, r: Ray, xs: []Intersection) usize {
+        // rnd.rayStats.tests += 1;
+
         // Transform the ray from world to object space using 
         // the object's inverse transformation
         const rt = r.transform(&self.itrans);
@@ -236,6 +238,7 @@ fn errorClone(self: *const Object, newobj: *Object, allocator: Allocator) void {
 pub const Group = struct {
     allocator: Allocator,           // It would be nicer to have a default allocator
     objects: std.ArrayList(*Object),// List of contained objects
+    bbox: BBox,                     // Bounding box of the group
 
     // Return a pointer to a dynamically allocated empty Group
     pub fn init(allocator: Allocator) *Group {
@@ -245,6 +248,7 @@ pub const Group = struct {
 
         grp.allocator = allocator;
         grp.objects = .empty;
+        grp.bbox = BBox{};
 
         return grp;
     }
@@ -288,6 +292,12 @@ fn groupIntersects(self: *const Object, r: Ray, xs: []Intersection) usize {
     const allocator = grp.allocator;
     var list: std.ArrayList(Intersection) = .empty;
     defer list.deinit(allocator);
+
+    // If the ray does't intersect the bounding box,
+    // no need to check the group components.
+    if (!grp.bbox.intersects(r)) {
+        return 0;
+    }
 
     // Scan all objects and subgroups recursively
     var xs_temp: [MAX_INTERSECTIONS]Intersection = undefined;
@@ -376,6 +386,9 @@ fn groupBoundsOf(self: *const Object) BBox {
         const cbox = obj.parentSpaceBoundsOf();
         box.addBox(&cbox);
     }
+
+    // Save bounding box to be used in future calls to groupIntersects()
+    grp.bbox = box;
 
     return box;
 }
@@ -1089,6 +1102,7 @@ pub const CsgOp = enum {
 const Csg = struct {
     left: *Object,  // Left object
     right: *Object, // Right object
+    bbox: BBox,     // Bounding box of the compound CSG objecg
     op: CsgOp,      // Operation
 };
 
@@ -1097,7 +1111,7 @@ pub fn csg(allocator: Allocator, op: CsgOp, left: *Object, right: *Object) *Obje
     const _csg = allocator.create(Csg)  catch {
             @panic("Out of memory in csg()");
     };
-    _csg.* = Csg{ .left = left, .right = right, .op = op };
+    _csg.* = Csg{ .left = left, .right = right, .bbox = BBox{}, .op = op };
     obj.data = _csg;
     left.parent = obj;
     right.parent = obj;
@@ -1119,6 +1133,12 @@ fn csgIntersects(self: *const Object, r: Ray, xs: []Intersection) usize {
     var xs_temp: [MAX_INTERSECTIONS]Intersection = undefined;
     const payload = self.data.?;
     const _csg: *Csg = @ptrCast(@alignCast(payload));
+
+    // If the ray does't intersect the bounding box,
+    // no need to check the left and right components.
+    if (!_csg.bbox.intersects(r)) {
+        return 0;
+    }
 
     const count_left = _csg.left.intersects(r, xs_temp[0..]);
     const count_right = _csg.right.intersects(r, xs_temp[count_left..]);
@@ -1219,6 +1239,9 @@ fn csgBoundsOf(self: *const Object) BBox {
     
     box.addBox(&lbbox);
     box.addBox(&rbbox);
+
+    // Save bounding box to be used in future calls to csgIntersects()
+    _csg.bbox = box;
 
     return box;
 }

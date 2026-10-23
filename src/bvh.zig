@@ -7,38 +7,40 @@ const Matrix = mth.Matrix;
 const Point = mth.Point;
 const Vector = mth.Vector;
 const point = mth.point;
+const vector = mth.vector;
 const pntEqual = mth.pntEqual;
 const matMul = mth.matMul;
 const matMulVec = mth.matMulVec;
 const INFINITY = mth.INFINITY;
 
+const rnd = @import("render.zig");
+const Ray = rnd.Ray;
+
 pub const BBox = struct {
     min: Point = point( INFINITY,  INFINITY,  INFINITY,),
     max: Point = point(-INFINITY, -INFINITY, -INFINITY,),
 
-    const Self = @This();
-
     // Add other box to self
-    pub fn addBox(self: *Self, other: *const BBox) void {
+    pub fn addBox(self: *BBox, other: *const BBox) void {
         self.min = @min(self.min, other.min);
         self.max = @max(self.max, other.max);
     }
 
     // Add a point to self
-    pub fn addPoint(self: *Self, pnt: Point) void {
+    pub fn addPoint(self: *BBox, pnt: Point) void {
         self.min = @min(self.min, pnt);
         self.max = @max(self.max, pnt);
     }
 
     // Does this box contain a given point?
-    pub fn containsPoint(self: *const Self, pnt: Point) bool {
+    pub fn containsPoint(self: *const BBox, pnt: Point) bool {
         const v1 = self.min <= pnt;
         const v2 = self.max >= pnt;
         return @reduce(.And, v1) and @reduce(.And, v2);
     }
 
     // Does this box contain another box?
-    pub fn containsBox(self: *const Self, other: *const Self) bool {
+    pub fn containsBox(self: *const BBox, other: *const BBox) bool {
         const v1 = self.min <= other.min;
         const v2 = self.min <= other.max;
         const v3 = self.max >= other.min;
@@ -47,8 +49,8 @@ pub const BBox = struct {
                @reduce(.And, v3) and @reduce(.And, v4);
     }
 
-    // Transform this box according to the given matrix and return it as new box
-    pub fn transform(self: *const Self, mat: *const Matrix) BBox {
+    // Transform this box according to the given matrix and return it as a new box
+    pub fn transform(self: *const BBox, mat: *const Matrix) BBox {
         const corners = [8]Point {
             .{ self.min[0], self.min[1], self.min[2], 1 },  // self.min
             .{ self.min[0], self.min[1], self.max[2], 1 },
@@ -69,7 +71,22 @@ pub const BBox = struct {
         return box;
     }
 
-    pub fn boxEqual(self: *const Self, other: *const Self) bool {
+    pub fn intersects(self: *const BBox, r: Ray) bool {
+        const xtmin, const xtmax = checkAxis(r.ori[0], r.dir[0], self.min[0], self.max[0]);
+        const ytmin, const ytmax = checkAxis(r.ori[1], r.dir[1], self.min[1], self.max[1]);
+        const ztmin, const ztmax = checkAxis(r.ori[2], r.dir[2], self.min[2], self.max[2]);
+
+        const tmin = @max(xtmin, @max(ytmin, ztmin));
+        const tmax = @min(xtmax, @min(ytmax, ztmax));
+
+        if (tmin > tmax) {
+            return false;
+        }
+
+        return true;
+    }
+
+    pub fn equal(self: *const BBox, other: *const BBox) bool {
         return pntEqual(self.min, other.min) and
                pntEqual(self.max, other.max);
     }
@@ -80,6 +97,23 @@ pub fn bbox(_min: Point, _max: Point) BBox {
         .min = _min,
         .max = _max,
    };
+}
+
+fn checkAxis(origin: Float, direction: Float, min: Float, max: Float) struct { Float, Float } {
+    const tmin_numerator = (min - origin);
+    const tmax_numerator = (max - origin);
+
+    // Assume FloatMode.strict -> division by zero yields +-inf
+    var tmin = tmin_numerator / direction;
+    var tmax = tmax_numerator / direction;
+
+    if (tmin > tmax) {
+        const temp = tmin;
+        tmin = tmax;
+        tmax = temp;
+    }
+
+    return .{ tmin, tmax };
 }
 
 const expect = std.testing.expect;
@@ -165,7 +199,7 @@ test "transforming a BBox" {
     var box = bbox(point(-1, -1, -1), point(1, 1, 1));
     const tbox = box.transform(&mat);
     var rbox = bbox(point(-1.4142135, -1.7071067, -1.7071067), point(1.4142135, 1.7071067, 1.7071067));
-    try expect(tbox.boxEqual(&rbox));
+    try expect(tbox.equal(&rbox));
 
     const allocator = std.testing.allocator;
     var shape = sphere(allocator);
@@ -175,7 +209,7 @@ test "transforming a BBox" {
 
     box = shape.parentSpaceBoundsOf();
     rbox = bbox(point(0.5, -5, 1), point(1.5, -1, 9));
-    try expect(box.boxEqual(&rbox));
+    try expect(box.equal(&rbox));
 
 }
 
@@ -191,7 +225,7 @@ test "BBpx of CSG objects" {
 
     const box = shape.parentSpaceBoundsOf();
     const rbox = bbox(point(-1, -1, -1), point(3, 4, 5));
-    try expect(box.boxEqual(&rbox));
+    try expect(box.equal(&rbox));
 }
 
 test "BBpx of Group objects" {
@@ -212,5 +246,61 @@ test "BBpx of Group objects" {
 
     const box = shape.parentSpaceBoundsOf();
     const rbox = bbox(point(-4.5, -3, -5), point(4, 7, 4.5));
-    try expect(box.boxEqual(&rbox));
+    try expect(box.equal(&rbox));
+}
+
+const IntersectsTest = struct {
+    ori: Point,
+    dir: Vector,
+    res: bool,
+};
+
+// For BBox(point(-1, -1, -1), point(1, 1, 1))
+const intersectsTest1Tests = [_]IntersectsTest{
+    .{ .ori = point(5, 0.5, 0) , .dir = vector(-1, 0, 0), .res = true },
+    .{ .ori = point(-5, 0.5, 0), .dir = vector(1, 0, 0) , .res = true },
+    .{ .ori = point(0.5, 5, 0) , .dir = vector(0, -1, 0), .res = true },
+    .{ .ori = point(0.5, -5, 0), .dir = vector(0, 1, 0) , .res = true },
+    .{ .ori = point(0.5, 0, 5) , .dir = vector(0, 0, -1), .res = true },
+    .{ .ori = point(0.5, 0, -5), .dir = vector(0, 0, 1) , .res = true },
+    .{ .ori = point(0, 0.5, 0) , .dir = vector(0, 0, 1) , .res = true },
+    .{ .ori = point(-2, 0, 0)  , .dir = vector(2, 4, 6) , .res = false},
+    .{ .ori = point(0, -2, 0)  , .dir = vector(6, 2, 4) , .res = false},
+    .{ .ori = point(0, 0, -2)  , .dir = vector(4, 6, 2) , .res = false},
+    .{ .ori = point(2, 0, 2)   , .dir = vector(0, 0, -1), .res = false},
+    .{ .ori = point(0, 2, 2)   , .dir = vector(0, -1, 0), .res = false},
+    .{ .ori = point(2, 2, 0)   , .dir = vector(-1, 0, 0), .res = false},
+};
+
+// For BBox(point(5, -2, 0), point(11, 4, 7))
+const intersectsTest2Tests = [_]IntersectsTest{
+    .{ .ori = point(15, 1, 2) , .dir = vector(-1, 0, 0), .res =  true  },
+    .{ .ori = point(-5, -1, 4), .dir = vector(1, 0, 0) , .res =  true  },
+    .{ .ori = point(7, 6, 5)  , .dir = vector(0, -1, 0), .res =  true  },
+    .{ .ori = point(9, -5, 6) , .dir = vector(0, 1, 0) , .res =  true  },
+    .{ .ori = point(8, 2, 12) , .dir = vector(0, 0, -1), .res =  true  },
+    .{ .ori = point(6, 0, -5) , .dir = vector(0, 0, 1) , .res =  true  },
+    .{ .ori = point(8, 1, 3.5), .dir = vector(0, 0, 1) , .res =  true  },
+    .{ .ori = point(9, -1, -8), .dir = vector(2, 4, 6) , .res =  false },
+    .{ .ori = point(8, 3, -4) , .dir = vector(6, 2, 4) , .res =  false },
+    .{ .ori = point(9, -1, -2), .dir = vector(4, 6, 2) , .res =  false },
+    .{ .ori = point(4, 0, 9)  , .dir = vector(0, 0, -1), .res =  false },
+    .{ .ori = point(8, 6, -1) , .dir = vector(0, -1, 0), .res =  false },
+    .{ .ori = point(12, 5, 4) , .dir = vector(-1, 0, 0), .res =  false },
+};
+
+test "BBox.intersects" {
+    var box = bbox(point(-1, -1, -1), point(1, 1, 1));
+    for (intersectsTest1Tests) |tst| {
+        const r = Ray.unit(tst.ori, tst.dir);
+        const res = box.intersects(r);
+        try expect(res == tst.res);
+    }
+
+    box = bbox(point(5, -2, 0), point(11, 4, 7));
+    for (intersectsTest2Tests) |tst| {
+        const r = Ray.unit(tst.ori, tst.dir);
+        const res = box.intersects(r);
+        try expect(res == tst.res);
+    }
 }

@@ -208,84 +208,6 @@ pub const World = struct {
         self.scene = undefined;
     }
 
-    // /// Default world, used only for tests.
-    // /// Contains a point light at (-10, 10, -10) and two spheres centered
-    // /// at the origin, the inner one with radius 0.5 and the outer one
-    // /// with radius 1.
-    // pub fn default() !World {
-    //     const allocator: Allocator = std.testing.allocator;
-    //     const light = PointLight{ .intensity = Color{1, 1, 1},
-    //                                           .position = point(-10, 10, -10) };
-
-    //     var s1 = sphere();  // Outer sphere
-    //     s1.material.color = Color{0.8, 1.0, 0.6};
-    //     s1.material.diffuse = 0.7;
-    //     s1.material.specular = 0.2;
-    //     const ps1: *Object = try allocator.create(Object);
-    //     ps1.* = s1;
-
-    //     var s2 = sphere();  // Inner sphere
-    //     s2.itrans = trf.invScaling(0.5, 0.5, 0.5);
-    //     const ps2: *Object = try allocator.create(Object);
-    //     ps2.* = s2;
-    //     var objs = try allocator.alloc(*Object, 2);
-    //     objs[0] = s1;
-    //     objs[1] = s2;
-
-    //     return .{
-    //         .objs = objs,
-    //         .light = light,
-    //         .allocator = allocator,
-    //     };
-    // }
-
-    pub fn render(self: *const World, cam: *const Camera, fname: []const u8, io: Io) !void {
-        const width = cam.hsize;
-        const height = cam.vsize;
-        var canvas = try Canvas.init(width,height,self.allocator);
-        defer canvas.deinit(self.allocator);
-        var pixels = canvas.pixels;
-        var local_stats = RayStats{};
-        rayStats = &local_stats;
-
-        printErr("\nRendering {s} ({d}x{d}) in a single thread\n", .{fname,width,height});
-        const start = std.Io.Clock.now(.awake, io);
-
-        var y: usize = 0;
-        while (y < height) : (y += 1) {
-            // if (y % 20 == 0) {
-            //     std.debug.print("y={d}\n", .{y});
-            // }
-            var x: usize = 0;
-            while (x < width) : (x += 1) {
-                const r = Ray.forPixel(cam, x, y);
-                const color = self.colorAt(r, MAX_RAYS);
-                // pixels[y][x] = color;
-                pixels[y * width + x] = color;
-            }
-        }
-
-        const end = std.Io.Clock.now(.awake, io);
-        const dur = start.durationTo(end);
-
-        try canvas.writePPM(io, fname);  
-
-        var buf: [16]u8 = undefined;
-        const mil = std.Io.Duration.toMilliseconds(dur);
-        const sec = std.Io.Duration.toSeconds(dur);
-        printErr("Rendered {s} pixels in ", .{printWithSeparators(width * height, &buf)});
-        if (mil < 1000) {
-            printErr("{d} ms\n", .{mil});
-        } else {
-            printErr("{d} s\n", .{sec});
-        }
-        printErr("\n", .{});
-        printErr("Total # of rays: {s:>10}\n", .{printWithSeparators(rayStats.total, &buf)});
-        printErr("Reflected rays:  {s:>10}\n", .{printWithSeparators(rayStats.reflected, &buf)});
-        printErr("Refracted rays:  {s:>10}\n", .{printWithSeparators(rayStats.refracted, &buf)});
-        printErr("Shadow rays:     {s:>10}\n", .{printWithSeparators(rayStats.shadow, &buf)});
-    }
-
     pub fn addAxes(self: *World) void {
         var xAxis = cylinder(self.allocator, -INFINITY, INFINITY, false);
         mth.matMulLeft(&xAxis.itrans, &invScaling(0.1, 0.1, 0.1));
@@ -312,6 +234,9 @@ pub const World = struct {
         var canvas = try Canvas.init(width,height,self.allocator);
         defer canvas.deinit(self.allocator);
         const pixels = canvas.pixels;
+
+        // Calculate the bounding box of the scene (stored in Group/CSG objects)
+        _ = self.scene.boundsOf();
 
         // Allocate one RayStats{} block per thread
         var rstats: []RayStats = try self.allocator.alloc(RayStats, tr.threads);
@@ -363,22 +288,24 @@ pub const World = struct {
             printErr("{d} s\n", .{sec});
         }
         // Add up the statistics from all the threads
-        var total: usize = 0;
         var reflected: usize = 0;
         var refracted: usize = 0;
         var shadow: usize = 0;
+        // var tests: usize = 0;
         for (rstats) |*rs| {
-            total     += rs.total;
             reflected += rs.reflected;
             refracted += rs.refracted;
             shadow    += rs.shadow;
+            // tests     += rs.tests;
         }
+        const total = width * height + reflected + refracted + shadow;
         printErr("\n", .{});
         printErr("Primary rays:    {s:>12}\n", .{ printWithSeparators(width * height, &buf) });
         printErr("Reflected rays:  {s:>12}\n", .{ printWithSeparators(reflected, &buf) });
         printErr("Refracted rays:  {s:>12}\n", .{ printWithSeparators(refracted, &buf) });
         printErr("Shadow rays:     {s:>12}\n", .{ printWithSeparators(shadow, &buf) });
         printErr("Total # of rays: {s:>12}\n", .{ printWithSeparators(total, &buf) });
+        // printErr("# of Obj tests:  {s:>12}\n", .{ printWithSeparators(tests, &buf) });
     }
 
     // Thread function to handle a block of contiguous lines
@@ -594,9 +521,10 @@ pub const RayStats = struct {
     reflected: usize = 0,
     refracted: usize = 0,
     shadow: usize = 0,
+    // tests: usize = 0,
 };
 
-threadlocal var rayStats: *RayStats = undefined;
+pub threadlocal var rayStats: *RayStats = undefined;
 
 pub const Ray = struct {
     ori: Point,
@@ -604,7 +532,6 @@ pub const Ray = struct {
 
     /// Create a ray with arbitrary length
     pub fn new(ori: Point, dir: Vector) Ray {
-        rayStats.total += 1;
         return .{
             .ori = ori,
             .dir = dir,
@@ -613,7 +540,6 @@ pub const Ray = struct {
 
     /// Create a ray with unit length
     pub fn unit(ori: Point, dir: Vector) Ray {
-        rayStats.total += 1;
         return .{
             .ori = ori,
             .dir = vecUnit(dir),
