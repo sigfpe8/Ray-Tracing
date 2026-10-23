@@ -75,29 +75,19 @@ pub fn renderDemo(io: Io, allocator: Allocator,  options: *DemoOptions) !void {
     const name = options.name.?;
     if (std.mem.eql(u8, name, "csg")) {
         try makeCSG(io, allocator, options);
-    } else if (std.mem.eql(u8, name, "pawn")) {
-        try makePawn(io, allocator, options);
-    } else if (std.mem.eql(u8, name, "pumpkin")) {
-        try makePumpkin(io, allocator, options);
     } else if (std.mem.eql(u8, name, "spheres")) {
         try makeGridOfSpheres(io, allocator, options);
-    } else if (std.mem.eql(u8, name, "teapot")) {
-        try makeTeapot(io, allocator, options);
     } else {
         printErr("Unknown demo name: {s}\n", .{name});
     }
 }
 
 fn makeGridOfSpheres(io: Io, allocator: Allocator, options: *DemoOptions) !void {
-    _ = options;
     const tracer = Tracer{};
 
-    var world = World.init(
-        PointLight{ .position = point(-15, 40, -70), .intensity = Color{1, 1, 1}},
-        allocator);
+    var world = World.init(PointLight{ .position = point(-15, 40, -70), .intensity = Color{1, 1, 1}}, allocator);
 
-    const cam = Camera.init(1000, 1000, std.math.pi / 4.0,
-                                point(-15, 33, -40), point(15,15,15), vector(0, 1, 0));
+    const cam = Camera.init(options.width, options.height, std.math.pi / 4.0, point(-15, 33, -40), point(15,15,15), vector(0, 1, 0));
 
     var back = plane(allocator);
     back.material = Material{ .ambient = 1, .diffuse = 0, .specular = 0 };
@@ -105,6 +95,8 @@ fn makeGridOfSpheres(io: Io, allocator: Allocator, options: *DemoOptions) !void 
     mth.matMulLeft(&back.itrans, &invTranslation(0, 0, 500));
 
     world.scene.addShape(back);
+
+    var grp = group(allocator);
 
     const numZ = 10.0;
     const numY = 10.0;
@@ -118,10 +110,12 @@ fn makeGridOfSpheres(io: Io, allocator: Allocator, options: *DemoOptions) !void 
                 var sph = sphere(allocator);
                 sph.material.color = Color{x/numX, y/numY, z/numZ};
                 sph.itrans = invTranslation(x*3, y*3, z*3);
-                world.scene.addShape(sph);
+                grp.addShape(sph);
             }
         }
     }
+
+    world.scene.addShape(grp);
 
     try world.renderThreads(&cam, "spheres.ppm", io, &tracer);
 
@@ -147,26 +141,25 @@ fn makeCSG(io: Io, allocator: Allocator, options: *DemoOptions) !void {
     const ball2 = ball1.clone(allocator);
     const ball3 = ball1.clone(allocator);
 
+    var green_material = Material{};
+    green_material.color = Color{0.5, 0.9, 0.5};
+    green_material.diffuse = 0.7;
+    green_material.specular = 0.3;
+    green_material.reflective = 0;
+
     var box1 = cube(allocator);
     box1.itrans = invTranslation(0, 1, 0);
-    box1.material = Material{};
-    box1.material.color = Color{0.5, 0.9, 0.5};
-    box1.material.diffuse = 0.7;
-    box1.material.specular = 0.3;
-    box1.material.reflective = 0;
+    box1.material = green_material;
 
     const box2 = box1.clone(allocator);
     const box3 = box1.clone(allocator);
 
     const tracer = Tracer{};
 
-    var world = World.init(
-        PointLight{ .position = point(-2, 10, -10), .intensity = Color{1, 1, 1}},
-        allocator);
+    var world = World.init(PointLight{ .position = point(-2, 10, -10), .intensity = Color{1, 1, 1}}, allocator);
 
-    // const grp = group(allocator);
-    // grp.addShape(box);
-    // grp.addShape(ball1);
+    const cam = Camera.init(options.width, options.height, 0.6, point(0, 8, -20), point(0,0,0), vector(0, 1, 0));
+
     const csg1 = csg(allocator, obi.CsgOp.csg_diff, box1, ball1 );
     csg1.chainTransf(&invRotationY(std.math.pi / 3.0));
 
@@ -187,28 +180,46 @@ fn makeCSG(io: Io, allocator: Allocator, options: *DemoOptions) !void {
     const csg3dup = csg3.clone(allocator);
     csg3dup.chainTransf(&invTranslation(0, 0, 4));
 
-    var cone1 = cone(allocator, -1, 0, false);
-    cone1.chainTransf(&invTranslation(0,2,-3));
-    cone1.material.color = gold;
+    var cyl11 = cylinder(allocator, -3, 3, true);
+    cyl11.chainTransf(&invScaling(0.5, 0.5, 0.5));
+    cyl11.material.color = gold;
 
-    var cyl1 = cylinder(allocator, 0, 1, false);
-    cyl1.chainTransf(&invTranslation(0, 0, -3));
-    cyl1.material.color = green;
+    var cyl12 = cylinder(allocator, -3, 3, true);
+    cyl12.chainTransf(&invScaling(0.5, 0.5, 0.5));
+    cyl12.chainTransf(&invRotationZ(std.math.pi / 2.0));
+    cyl12.material.color = gold;
 
-    var grp1 = group(allocator);
-    grp1.addShape(cone1);
-    grp1.addShape(cyl1);
+    var cyl13 = cylinder(allocator, -3, 3, true);
+    cyl13.chainTransf(&invScaling(0.5, 0.5, 0.5));
+    cyl13.chainTransf(&invRotationX(std.math.pi / 2.0));
+    cyl13.material.color = gold;
 
-    var grp2 = grp1.clone(allocator);
-    grp2.chainTransf(&invRotationZ(std.math.pi / 2.0));
-    grp2.chainTransf(&invTranslation(4, 0, 0));
+    var grp4 = group(allocator);
+    grp4.addShape(cyl11);
+    grp4.addShape(cyl12);
+    grp4.addShape(cyl13);
 
-    var grp3 = grp1.clone(allocator);
-    grp3.chainTransf(&invRotationZ(-std.math.pi / 2.0));
-    grp3.chainTransf(&invTranslation(-4, 0, 0));
+    // Center
+    var box4 = cube(allocator);
+    box4.material = green_material;
+    var csg4 = csg(allocator, obi.CsgOp.csg_diff, box4, grp4);
+    csg4.chainTransf(&invRotationY(std.math.pi / 3.0));
+    csg4.chainTransf(&invTranslation(0, 1, -4));
 
-    const cam = Camera.init(options.width, options.height, std.math.pi / 5.0,
-                            point(0, 5, -8), point(0,0,0), vector(0, 1, 0));
+    // Left
+    const grp5 = grp4.clone(allocator);
+    const box5 = box4.clone(allocator);
+    var csg5 = csg(allocator, obi.CsgOp.csg_inter, box5, grp5);
+    csg5.chainTransf(&invRotationY(-std.math.pi / 3.0));
+    csg5.chainTransf(&invTranslation(-4, 1, -4));
+
+    // Right
+    const grp6 = grp4.clone(allocator);
+    const box6 = box4.clone(allocator);
+    var csg6 = csg(allocator, obi.CsgOp.csg_union, box6, grp6);
+    csg6.chainTransf(&invRotationY(std.math.pi / 3.0));
+    csg6.chainTransf(&invTranslation(4, 1, -4));
+
 
     world.scene.addShape(floor);
     world.scene.addShape(csg1);
@@ -218,159 +229,11 @@ fn makeCSG(io: Io, allocator: Allocator, options: *DemoOptions) !void {
     world.scene.addShape(csg2dup);
     world.scene.addShape(csg3dup);
 
-    world.scene.addShape(grp1);
-    world.scene.addShape(grp2);
-    world.scene.addShape(grp3);
+    world.scene.addShape(csg4);
+    world.scene.addShape(csg5);
+    world.scene.addShape(csg6);
 
-    try world.renderThreads(&cam, "csg2.ppm", io, &tracer);
+    try world.renderThreads(&cam, "csg.ppm", io, &tracer);
 
     world.deinit(); // Should free everything
-}
-
-fn makePawn(io: Io, allocator: Allocator, options: *DemoOptions) !void {
-    var floor = plane(allocator);
-    const gray0 = Color{0.1, 0.1, 0.1};
-    const gray1 = Color{0.9, 0.9, 0.9};
-    floor.material.pattern = checkers(gray0, gray1);
-    floor.material.specular = 0;
-    floor.material.reflective = 0.3;
-
-    var right_wall = plane(allocator);
-    right_wall.itrans = invRotationX(std.math.pi / 2.0);
-    right_wall.material.pattern = checkers(gray0, gray1);
-    right_wall.material.specular = 0;
-
-    const tracer = Tracer{};
-
-    const world = World.init(
-        PointLight{ .position = point(-7, 11, -10), .intensity = Color{1, 1, 1}},
-        allocator);
-
-    const cam = Camera.init(options.width, options.height, std.math.pi / 3.0,
-                                point(0, 4, -5), point(0,2,0), vector(0, 1, 0));
-
-    const grp = try readObjFile(io, allocator, "../../models/paulin/pawn-chess.obj", &glassMaterial);
-    // grp.itrans = invTranslation(0, 0, -3);
-
-    world.scene.addShape(grp);
-    world.scene.addShape(floor);
-    try world.renderThreads(&cam, "pawn.ppm", io, &tracer);
-}
-
-fn makeUtahTeapot(io: Io, allocator: Allocator) !void {
-    var floor = plane(allocator);
-    const gray0 = Color{0.2, 0.2, 0.2};
-    const gray1 = Color{0.6, 0.6, 0.6};
-    floor.material.pattern = checkers(gray0, gray1);
-    floor.material.specular = 0;
-
-    var right_wall = plane(allocator);
-    right_wall.itrans = invRotationX(std.math.pi / 2.0);
-    right_wall.material.pattern = checkers(gray0, gray1);
-    right_wall.material.specular = 0;
-
-    const world = World.init(
-        PointLight{ .position = point(-1, 100, -100), .intensity = Color{1, 1, 1}},
-        allocator);
-
-    const cam = Camera.init(600, 300, std.math.pi / 4.0,
-                            point(0, 5, -7), point(0,0,-1), vector(0, 1, 0));
-
-    var grp = try readObjFile(io, allocator, "../../models/utah_teapot.obj", &testMaterial);
-    grp.itrans = invTranslation(0, 0, -3);
-
-    world.scene.addShape(grp);
-    world.scene.addShape(floor);
-    try world.render(&cam, "utah_teapot.ppm", io);
-}
-
-fn makeSmoothTeapot(io: Io, allocator: Allocator) !void {
-    var floor = plane(allocator);
-    const gray0 = Color{0.2, 0.2, 0.2};
-    const gray1 = Color{0.6, 0.6, 0.6};
-    floor.material.pattern = checkers(gray0, gray1);
-    floor.material.specular = 0;
-
-    var right_wall = plane(allocator);
-    right_wall.itrans = invRotationX(std.math.pi / 2.0);
-    right_wall.material.pattern = checkers(gray0, gray1);
-    right_wall.material.specular = 0;
-
-    const world = World.init(
-        PointLight{ .position = point(-1, 100, -100), .intensity = Color{1, 1, 1}},
-        allocator);
-
-    const cam = Camera.init(600, 300, std.math.pi / 4.0,
-                                point(0, 5, -7), point(0,0,0), vector(0, 1, 0));
-
-    var grp = try readObjFile(io, allocator, "../../models/newell_teaset/teapot.obj", &testMaterial);
-    grp.itrans = invRotationY(-std.math.pi / 2.0);
-    const trans = invTranslation(0, 0, -2);
-    grp.chainTransf(&trans);
-
-    world.scene.addShape(grp);
-    world.scene.addShape(floor);
-    try world.render(&cam, "teapot_normals2.ppm", io);
-}
-
-fn makeTeapot(io: Io, allocator: Allocator, options: *DemoOptions) !void {
-    var floor = plane(allocator);
-    const gray0 = Color{0.2, 0.2, 0.2};
-    const gray1 = Color{0.6, 0.6, 0.6};
-    floor.material.pattern = checkers(gray0, gray1);
-    floor.material.specular = 0;
-
-    var right_wall = plane(allocator);
-    right_wall.itrans = invRotationX(std.math.pi / 2.0);
-    right_wall.material.pattern = checkers(gray0, gray1);
-    right_wall.material.specular = 0;
-
-    const tracer = Tracer{};
-
-    const world = World.init(
-        PointLight{ .position = point(-1, 100, -100), .intensity = Color{1, 1, 1}},
-        allocator);
-
-    const cam = Camera.init(options.width, options.height, std.math.pi / 3.0,
-                                point(0, 5, -7), point(0,0,-1), vector(0, 1, 0));
-
-    var grp = try readObjFile(io, allocator, "../../models/teapot.obj", &testMaterial);
-    grp.itrans = invTranslation(0, 0, -3);
-
-    world.scene.addShape(grp);
-    world.scene.addShape(floor);
-    try world.renderThreads(&cam, "teapot.ppm", io, &tracer);
-}
-
-fn makePumpkin(io: Io, allocator: Allocator, options: *DemoOptions) !void {
-    var floor = plane(allocator);
-    const gray0 = Color{0.2, 0.2, 0.2};
-    const gray1 = Color{0.6, 0.6, 0.6};
-    floor.material.pattern = checkers(gray0, gray1);
-    floor.material.specular = 0;
-
-    var right_wall = plane(allocator);
-    right_wall.itrans = invRotationX(std.math.pi / 2.0);
-    right_wall.material.pattern = checkers(gray0, gray1);
-    right_wall.material.specular = 0;
-
-    const tracer = Tracer{};
-
-    const world = World.init(
-        PointLight{ .position = point(-1, 100, -100), .intensity = Color{1, 1, 1}},
-        allocator);
-
-    const cam = Camera.init(options.width, options.height, std.math.pi / 5.0,
-                                point(0, 10, -100), point(0,10,0), vector(0, 1, 0));
-
-    var grp = try readObjFile(io, allocator, "../../models/pumpkin.obj", &testMaterial);
-    // const scl = invScaling(0.4, 0.4, 0.4);
-    // const rot = invRotationX(std.math.pi / 8.0);
-    grp.chainTransf(&invScaling(0.4, 0.4, 0.4));
-    grp.chainTransf(&invRotationX(std.math.pi / 8.0));
-
-    world.scene.addShape(grp);
-    // world.scene.addShape(floor);
-    // try world.render(&cam, "pumpkin.ppm", io);
-    try world.renderThreads(&cam, "pumpkin.ppm", io, &tracer);
 }
