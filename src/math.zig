@@ -24,7 +24,8 @@ const assert = std.debug.assert;
 /// code, so this is why I use 'naked' vectors.
 
 pub const Float = f32;
-pub const EPSILON = 0.00001;
+// FIX: We had to increase EPSILON from 0.00001 to 0.0001 to remove the acne in the torus...
+pub const EPSILON = 0.0001;
 pub const INFINITY = std.math.floatMax(Float);
 
 pub const Tuple = @Vector(4, Float);

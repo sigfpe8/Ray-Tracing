@@ -30,6 +30,9 @@ const INFINITY = mth.INFINITY;
 const mtl = @import("material.zig");
 const Material = mtl.Material;
 
+const qua = @import("quartic.zig");
+const solveQuartic = qua.solveQuartic;
+
 const rnd = @import("render.zig");
 const Ray = rnd.Ray;
 const Intersection = rnd.Intersection;
@@ -417,11 +420,11 @@ var sphere_vtable = VTable {
 
 fn sphereIntersects(self: *const Object, r: Ray, xs: []Intersection) usize {
     // It is necessary to subract the point(0,0,0) in order to get a vector (w=0)
-    // sr = vector pointing from sphere (0,0,0) to the ray origin
-    const sr = r.ori - point(0,0,0);
+    // o = vector pointing from world origin (0,0,0) to the ray origin
+    const o = r.ori - point(0,0,0);
     const a = dot(r.dir, r.dir);
-    const b = 2 * dot(r.dir, sr);
-    const c = dot(sr, sr) - 1;
+    const b = 2 * dot(r.dir, o);
+    const c = dot(o, o) - 1;
     const discr = b * b - 4 * a * c;
 
     if (discr < 0) {
@@ -454,6 +457,134 @@ fn sphereBoundsOf(self: *const Object) BBox {
     _ = self;
     return bbox(point(-1, -1, -1), point(1, 1, 1));
 }
+
+/// Generic torus centered at origin ------------------------------------------
+/// See "Ray Tracing from the Ground Up", pages 373-377
+pub const Torus = struct {
+    a: Float,    // Outer radius (swept radius)
+    b: Float,    // Inner radius (tube radius)
+    bbox: BBox,  // Bounding box of the torus
+};
+
+pub fn torus(allocator: Allocator, a: ?Float, b: ?Float) *Object {
+    var obj = Object.init(allocator, &torus_vtable);
+    const tor = allocator.create(Torus)  catch {
+            @panic("Out of memory in torus()");
+    };
+
+    tor.a = a orelse 2;
+    tor.b = b orelse 1;
+    tor.bbox = BBox{};
+
+    obj.data = tor;
+    return obj;
+}
+
+var torus_vtable = VTable {
+    .intersects = torusIntersects,
+    .normalAt = torusNormalAt,
+    .includes = objectIncludes,
+    .addShape = errorAddShape,
+    .boundsOf = torusBoundsOf,
+    .clone = torusClone,
+    .deinit = torusDeinit,
+};
+
+fn torusIntersects(self: *const Object, r: Ray, xs: []Intersection) usize {
+    const payload = self.data.?;
+    const tor: *Torus = @ptrCast(@alignCast(payload));
+
+    // If the ray doesn't intersect the bounding box of the torus,
+    // we can avoid the complicated algebra of checking the torus itself.
+    if (!tor.bbox.intersects(r)) {
+        return 0;
+    }
+
+    const a = tor.a;
+    const b = tor.b;
+    // It is necessary to subract the point(0,0,0) in order to get a vector (w=0)
+    // o = vector pointing from the world origin (0,0,0) to the ray origin
+    const o = r.ori - point(0,0,0);             // (x1, y1, z1)
+    const sum_d_sqrd = dot(r.dir, r.dir);       // dx^2 + dy^2 + dz^2
+    const e = dot(o, o) - a * a - b * b;        // x1^2 + y1^2 + z1^2 - a^2 - b^2
+    const f = dot(r.dir, o);                    // x1*dx + y1*dy + z1*dz
+    const four_a_sqrd = 4 * a * a;              // 4a^2
+
+    const y1 = r.ori[1];                        // r.ori.y
+    const d2 = r.dir[1];                        // r.dir.y
+
+    const coeff = [5]Float{
+        e * e - four_a_sqrd * (b * b - y1 * y1),  // Constant term (c[0])
+        4.0 * f * e + 2.0 * four_a_sqrd * y1 * d2,
+        2.0 * sum_d_sqrd * e + 4.0 * f * f + four_a_sqrd * d2 * d2,
+        4.0 * sum_d_sqrd * f,
+        sum_d_sqrd * sum_d_sqrd,                  // Coefficient of t^4 (c[4])
+    };
+
+    var sols: [4]Float = undefined;
+
+    const n = solveQuartic(&coeff, &sols);
+
+    // If there are no real roots, the ray misses the torus
+    if (n == 0) {
+        return 0;
+    }
+
+    // Return all solutions (1 to 4)
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        xs[i].ti = sols[i];
+        xs[i].ob = self;
+    }
+
+    return n;
+}
+
+fn torusNormalAt(self: *const Object, obj_point: Point, px: *const Intersection) Vector {
+    _ = px;
+    const payload = self.data.?;
+    const tor: *Torus = @ptrCast(@alignCast(payload));
+
+    const s = obj_point * obj_point;          // (x^2, y^2, z^1)
+    const p = s[0] + s[1] + s[2];             // x^2 + y^2 + z^2
+    const q = tor.a * tor.a + tor.b * tor.b;  // a^2 + b^2
+    const r = 4 * (p - q);                    // 4 * [x^2+ y^2 + z^2 - (a^2 + b^2)]
+    const w = 8 * tor.a * tor.a;              // 4 * (2 * a^2)
+
+    const n = point(obj_point[0] * r,         // 4x[x^2 + y^2 + z^2 - (a^2 + b^2)]
+                    obj_point[1] * (r + w),   // 4y[x^2 + y^2 + z^2 - (a^2 + b^2) + 2a^2]
+                    obj_point[2] * r);        // 4z[x^2 + y^2 + z^2 - (a^2 + b^2)]
+
+    return vecUnit(n);
+}
+
+fn torusBoundsOf(self: *const Object) BBox {
+    const payload = self.data.?;
+    const tor: *Torus = @ptrCast(@alignCast(payload));
+    const r = tor.a + tor.b;
+    const box = bbox(point(-r, -tor.b, -r), point(r, tor.b, r));
+    tor.bbox = box;
+
+    return box;
+}
+
+fn torusClone(self: *const Object, newobj: *Object, allocator: Allocator) void {
+    const payload = self.data.?;
+    const oldtor: *Torus = @ptrCast(@alignCast(payload));
+    const newtor: *Torus = allocator.create(Torus)  catch {
+            @panic("Out of memory in torusClone()");
+    };
+
+    newtor.* = oldtor.*;
+    newobj.data = newtor;
+}
+
+fn torusDeinit(self: *Object, allocator: Allocator) void {
+    const payload = self.data.?;
+    const tor: *Torus = @ptrCast(@alignCast(payload));
+    allocator.destroy(tor);
+}
+
 
 /// XZ Plane through the origin (x,0,z) ---------------------------------------
 pub fn plane(allocator: Allocator) *Object {
@@ -1102,7 +1233,7 @@ pub const CsgOp = enum {
 const Csg = struct {
     left: *Object,  // Left object
     right: *Object, // Right object
-    bbox: BBox,     // Bounding box of the compound CSG objecg
+    bbox: BBox,     // Bounding box of the compound CSG object
     op: CsgOp,      // Operation
 };
 

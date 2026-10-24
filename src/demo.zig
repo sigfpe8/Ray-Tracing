@@ -36,6 +36,7 @@ const group = obi.group;
 const plane = obi.plane;
 const smoothTriangle = obi.smoothTriangle;
 const sphere = obi.sphere;
+const torus = obi.torus;
 const triangle = obi.triangle;
 
 const obf = @import("objfile.zig");
@@ -77,6 +78,8 @@ pub fn renderDemo(io: Io, allocator: Allocator,  options: *DemoOptions) !void {
         try makeCSG(io, allocator, options);
     } else if (std.mem.eql(u8, name, "spheres")) {
         try makeGridOfSpheres(io, allocator, options);
+    } else if (std.mem.eql(u8, name, "torus")) {
+        try makeTorus(io, allocator, options);
     } else {
         printErr("Unknown demo name: {s}\n", .{name});
     }
@@ -234,6 +237,37 @@ fn makeCSG(io: Io, allocator: Allocator, options: *DemoOptions) !void {
     world.scene.addShape(csg6);
 
     try world.renderThreads(&cam, "csg.ppm", io, &tracer);
+
+    world.deinit(); // Should free everything
+}
+
+fn makeTorus(io: Io, allocator: Allocator, options: *DemoOptions) !void {
+    var floor = plane(allocator);
+    const gray0 = Color{0.3, 0.3, 0.3};
+    const gray1 = Color{0.6, 0.6, 0.6};
+    floor.material.pattern = checkers(gray0, gray1);
+    floor.material.specular = 0;
+    floor.material.reflective = 0.1;
+
+    var donut = torus(allocator, null, null);
+    // donut.chainTransf(&invScaling(1.3, 1.3, 1.3));
+    donut.chainTransf(&invTranslation(0, 1, 0));
+    donut.material = Material{};
+    donut.material.color = Color{1, 0.8, 0.1};
+    donut.material.diffuse = 0.7;
+    donut.material.specular = 0.4;
+    donut.material.reflective = 0;
+
+    const tracer = Tracer{};
+
+    var world = World.init(PointLight{ .position = point(-6, 10, -10), .intensity = Color{1, 1, 1}}, allocator);
+
+    const cam = Camera.init(options.width, options.height, 0.6, point(0, 8, -10), point(0,0,0), vector(0, 1, 0));
+
+    world.scene.addShape(floor);
+    world.scene.addShape(donut);
+
+    try world.renderThreads(&cam, "torus.ppm", io, &tracer);
 
     world.deinit(); // Should free everything
 }
