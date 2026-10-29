@@ -2,9 +2,10 @@
 zig-out/
 book/
 rendered/
+test/
+meshes/
+todo.md
 *.png
 *.ppm
 *.obj
-*.yml
-*.yaml
 

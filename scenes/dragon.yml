@@ -1,0 +1,42 @@
+- add: camera
+  width: 800
+  height: 400
+  field-of-view: PI/4
+  from: [0, 3, -10]
+  to: [0, 2, 0]
+  up: [0, 1, 0]
+
+- add: point-light
+  at: [20, 6, -20]
+  intensity: [1, 1, 1]
+
+- add: group
+  obj: dragon.obj
+  transform:
+    - [rotate-y, -PI/8 ]
+    - [ translate, 1, 0, -1 ]
+  material:
+    color: [ 0.8, 0.8, 0 ]
+
+# floor
+- add: plane
+  material:
+    pattern:
+      type: checkers
+      colors:
+        - [0.00, 0.00, 0.00]
+        - [0.75, 0.75, 0.75]
+    ambient: 0.5
+    diffuse: 0.4
+    specular: 0.8
+    reflective: 0.1
+
+# backdrop
+- add: plane
+  transform:
+    - [ rotate-x, 1.57079633 ]   # PI/2
+    - [ translate, 0, 0, 6 ]
+  material:
+    color: [ 1, 0.9, 0.9 ]
+    specular: 0
+

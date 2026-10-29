@@ -1,0 +1,35 @@
+# Smooth teapot (model with vertex normals)
+
+- add: camera
+  width: 800
+  height: 400
+  field-of-view: PI/4
+  from: [0, 5, -4]
+  to: [0, 1, 0]
+  up: [0, 1, 0]
+
+- add: point-light
+  at: [-30, 20, -30]
+  intensity: [1, 1, 1]
+
+- add: group
+  obj: teapot_normals.obj
+  transform:
+    - [rotate-y, -1.17809725 ]
+  material:
+    color: [ 0.8, 0.8, 0 ]
+
+# floor
+- add: plane
+  # transform:
+  #   - [ rotate-y, 0.31415 ]
+  material:
+    pattern:
+      type: checkers
+      colors:
+        - [0.00, 0.00, 0.00]
+        - [0.75, 0.75, 0.75]
+    ambient: 0.5
+    diffuse: 0.4
+    specular: 0.8
+    reflective: 0.1

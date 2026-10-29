@@ -157,7 +157,7 @@ const HitInfo = struct {
             .pnt = pnt,
             // FIX: why do we have to use 10 * EPSILON instead of just EPSILON to remove the noise (acne)?
             .over_pnt = pnt + vecScale(normalv, 50 * EPSILON),
-            .under_pnt = pnt - vecScale(normalv, 50 * EPSILON),
+            .under_pnt = pnt - vecScale(normalv, 20 * EPSILON),
             .eyev = eyev,
             .normalv = normalv,
             .reflectv = reflect(r.dir, normalv),
