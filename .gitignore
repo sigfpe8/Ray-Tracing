@@ -5,7 +5,6 @@ rendered/
 test/
 meshes/
 todo.md
-*.png
 *.ppm
 *.obj
 
